@@ -19,6 +19,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 namespace SST::Core::Serialization {
 
@@ -76,15 +77,32 @@ serializable_factory::delete_statics()
 serializable_base*
 serializable_factory::get_serializable(uint32_t cls_id)
 {
+    return get_builder(cls_id)->build();
+}
+
+serializable_builder*
+serializable_factory::get_builder(uint32_t cls_id)
+{
+    if ( builders_ == nullptr ) {
+        throw std::runtime_error("cannot deserialize class ID: no serializable classes are registered");
+    }
     builder_map::const_iterator it = builders_->find(cls_id);
     if ( it == builders_->end() ) {
-        std::cerr << "class id " << cls_id << " is not a valid serializable id" << std::endl;
-        // spkt_throw_printf(value_error,
-        //                  "class id %ld is not a valid serializable id",
-        //                  cls_id);
+        throw std::runtime_error("class ID " + std::to_string(cls_id) + " is not a valid serializable ID");
     }
-    serializable_builder* builder = it->second;
-    return builder->build();
+    return it->second;
+}
+
+serializable_base*
+serializable_factory::get_serializable_as(uint32_t cls_id, const void* family_token)
+{
+    serializable_builder* builder = get_builder(cls_id);
+    serializable_base*    object  = builder->build_as(family_token);
+    if ( object == nullptr ) {
+        throw std::runtime_error(
+            "class ID " + std::to_string(cls_id) + " is not registered for the requested serialization family");
+    }
+    return object;
 }
 
 } // namespace SST::Core::Serialization

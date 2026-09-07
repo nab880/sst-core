@@ -17,6 +17,8 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <stdexcept>
 #include <type_traits>
 
 namespace SST::Core::Serialization {
@@ -47,6 +49,74 @@ void unpack_serializable(serializable_base*& s, serializer& ser);
 void map_serializable(serializable_base*& s, serializer& ser);
 
 } // namespace pvt
+
+/**
+   Unpack an exclusively owned polymorphic pointer written by SST_SER(pointer).
+   Family must opt into family-aware construction. An already unpacked pointer
+   is rejected rather than introducing a second owner. With pointer tracking,
+   the new Family* is published before decoding its fields, allowing non-owning
+   self-references and nested back-references through the same Family* type.
+
+   validate() receives the decoded pointer (including nullptr) before ownership
+   is returned. If decoding or validation throws, newly published pointer keys
+   (including those of nested objects) are removed before the object is destroyed.
+   The failed unpack session must still be discarded or reset; this does not
+   restore external objects or rewind the input. This permits callers to validate
+   an enclosing discriminator without depending on pointer framing or factory
+   internals.
+ */
+template <class Family, class Validator>
+std::unique_ptr<Family>
+unpack_exclusive_serializable(serializer& ser, Validator validate)
+{
+    static_assert(std::is_base_of_v<serializable, Family>, "Family must derive from serializable");
+    if ( ser.mode() != serializer::UNPACK ) {
+        throw std::logic_error("unpack_exclusive_serializable requires unpack mode");
+    }
+
+    uintptr_t stored_pointer = 0;
+    bool      nonnull        = false;
+    if ( !ser.is_pointer_tracking_enabled() ) {
+        ser.primitive(nonnull);
+    }
+    else {
+        ser.unpack(stored_pointer);
+        nonnull = stored_pointer != 0;
+        if ( nonnull && ser.unpacker().check_pointer_unpack(stored_pointer) != 0 ) {
+            throw std::runtime_error("cannot unpack an aliased exclusively owned serializable");
+        }
+    }
+
+    std::unique_ptr<Family> object;
+    const size_t            publication_mark = ser.unpacker().mark();
+    try {
+        if ( nonnull ) {
+            long serialized_class_id = -1;
+            ser.unpack(serialized_class_id);
+            if constexpr ( sizeof(long) > sizeof(uint32_t) ) {
+                if ( serialized_class_id < 0 ||
+                     static_cast<uint64_t>(serialized_class_id) > std::numeric_limits<uint32_t>::max() ) {
+                    throw std::runtime_error("serialized class ID is outside the supported range");
+                }
+            }
+
+            object.reset(serializable_factory::get_serializable_as<Family>(static_cast<uint32_t>(serialized_class_id)));
+            if ( object->cls_id() != static_cast<uint32_t>(serialized_class_id) ) {
+                throw std::runtime_error("exclusively owned serializable reported the wrong class ID");
+            }
+            if ( ser.is_pointer_tracking_enabled() ) {
+                ser.unpacker().report_real_pointer(stored_pointer, reinterpret_cast<uintptr_t>(object.get()));
+            }
+            object->serialize_order(ser);
+        }
+        validate(static_cast<const Family*>(object.get()));
+    }
+    catch ( ... ) {
+        ser.unpacker().rollback(publication_mark);
+        throw;
+    }
+    return object;
+}
 
 
 template <class T>

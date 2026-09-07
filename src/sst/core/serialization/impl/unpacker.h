@@ -20,17 +20,20 @@
 #include "sst/core/serialization/impl/ser_buffer_accessor.h"
 #include "sst/core/serialization/impl/ser_shared_ptr_tracker.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <map>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace SST::Core::Serialization::pvt {
 
 class ser_unpacker : public ser_buffer_accessor, public ser_shared_ptr_unpacker
 {
     std::map<uintptr_t, uintptr_t> ser_pointer_map;
+    std::vector<uintptr_t>         pointer_publications;
     uintptr_t                      split_key = 0;
 
 public:
@@ -59,8 +62,14 @@ public:
 
     uintptr_t check_pointer_unpack(uintptr_t ptr);
     void      unpack_string(std::string& str);
-    void      report_new_pointer(uintptr_t real_ptr) { ser_pointer_map[split_key] = real_ptr; }
-    void      report_real_pointer(uintptr_t ptr, uintptr_t real_ptr) { ser_pointer_map[ptr] = real_ptr; }
+    void      report_new_pointer(uintptr_t real_ptr) { report_real_pointer(split_key, real_ptr); }
+    void      report_real_pointer(uintptr_t ptr, uintptr_t real_ptr);
+
+    // Rollback removes keys first published after the marker, including nested objects. Updating an existing
+    // key does not publish it again. Neither old values nor object mutations are restored; an unpack failure
+    // invalidates the session even after rollback.
+    size_t mark() const noexcept { return pointer_publications.size(); }
+    void   rollback(size_t mark) noexcept;
 }; // class ser_unpacker
 
 } // namespace SST::Core::Serialization::pvt

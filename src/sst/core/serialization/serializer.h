@@ -59,6 +59,10 @@ public:
     // Starting a new mode destroys the tracking object of the current mode and constructs a new tracking object
     void start_sizing() { ser_.emplace<SIZER>(); }
     void start_packing(char* buffer, size_t size) { ser_.emplace<PACK>(buffer, size); }
+
+    // Any exception during unpacking invalidates that session. Discard it or call start_unpacking() before
+    // decoding again. Pointer-publication rollback does not rewind the input, restore changed objects, or
+    // undo shared-ownership tracking. Resetting the session does not clean up caller-owned partial results.
     void start_unpacking(char* buffer, size_t size) { ser_.emplace<UNPACK>(buffer, size); }
     void start_mapping(ObjectMap* obj) { ser_.emplace<MAP>(obj); }
 

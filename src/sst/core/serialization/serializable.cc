@@ -14,6 +14,9 @@
 #include "sst/core/serialization/serializable.h"
 
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 
 namespace SST::Core::Serialization::pvt {
 
@@ -52,9 +55,26 @@ unpack_serializable(serializable_base*& s, serializer& ser)
         s = nullptr;
     }
     else {
-        s = serializable_factory::get_serializable(cls_id);
-        ser.unpacker().report_new_pointer(reinterpret_cast<uintptr_t>(s));
-        s->serialize_order(ser);
+        if constexpr ( sizeof(long) > sizeof(uint32_t) ) {
+            if ( cls_id < 0 || static_cast<uint64_t>(cls_id) > std::numeric_limits<uint32_t>::max() ) {
+                throw std::runtime_error("serialized class ID is outside the supported range");
+            }
+        }
+        std::unique_ptr<serializable_base> unpacked(
+            serializable_factory::get_serializable(static_cast<uint32_t>(cls_id)));
+        const size_t publication_mark = ser.unpacker().mark();
+        try {
+            if ( ser.is_pointer_tracking_enabled() ) {
+                ser.unpacker().report_new_pointer(reinterpret_cast<uintptr_t>(unpacked.get()));
+            }
+            unpacked->serialize_order(ser);
+        }
+        catch ( ... ) {
+            // Remove nested publications before destruction can delete the corresponding owned objects.
+            ser.unpacker().rollback(publication_mark);
+            throw;
+        }
+        s = unpacked.release();
     }
 }
 

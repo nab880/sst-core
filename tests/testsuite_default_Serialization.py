@@ -78,6 +78,12 @@ class testcase_Serialization(SSTTestCase):
     def test_Serialization_aggregate(self):
         self.serialization_test_template("aggregate")
 
+    def test_Serialization_simple_network_request(self):
+        self.serialization_test_template("simple_network_request")
+
+    def test_Serialization_exclusive_serializable(self):
+        self.serialization_test_template("exclusive_serializable")
+
 #####
     def serialization_test_template(self, testtype, default_reffile = True):
 

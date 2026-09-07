@@ -13,6 +13,7 @@
 
 #include "sst/core/serialization/serializer.h"
 
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -28,6 +29,35 @@ ser_unpacker::check_pointer_unpack(uintptr_t ptr)
     // Keep a copy of the ptr in case we have a split report
     split_key = ptr;
     return 0;
+}
+
+void
+ser_unpacker::report_real_pointer(uintptr_t ptr, uintptr_t real_ptr)
+{
+    auto [entry, inserted] = ser_pointer_map.try_emplace(ptr, real_ptr);
+    if ( !inserted ) {
+        entry->second = real_ptr;
+        return;
+    }
+
+    try {
+        pointer_publications.push_back(ptr);
+    }
+    catch ( ... ) {
+        // A failed journal allocation must not leave an unrecorded publication behind.
+        ser_pointer_map.erase(entry);
+        throw;
+    }
+}
+
+void
+ser_unpacker::rollback(size_t mark) noexcept
+{
+    assert(mark <= pointer_publications.size());
+    while ( pointer_publications.size() > mark ) {
+        ser_pointer_map.erase(pointer_publications.back());
+        pointer_publications.pop_back();
+    }
 }
 
 void

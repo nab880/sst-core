@@ -21,6 +21,7 @@
 #include <limits>
 #include <stdint.h>
 #include <string>
+#include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
 
@@ -237,6 +238,13 @@ class serializable_builder
 public:
     virtual serializable_base* build() const = 0;
 
+    /**
+       Build an object only when its concrete type opted into the requested
+       serialization family. The returned pointer uses the same serializable
+       base as build(); the typed factory restores the family pointer.
+     */
+    virtual serializable_base* build_as(const void* family_token) const = 0;
+
     virtual ~serializable_builder() {}
 
     virtual const char* name() const = 0;
@@ -245,6 +253,32 @@ public:
 
     virtual bool sanity(serializable_base* ser) = 0;
 };
+
+namespace pvt {
+
+template <class T, class = void>
+struct serializable_family_builder
+{
+    static serializable_base* build(const void* UNUSED(family_token)) { return nullptr; }
+};
+
+template <class T>
+struct serializable_family_builder<T, std::void_t<typename T::serialization_family>>
+{
+    using family_type = typename T::serialization_family;
+
+    static_assert(std::is_base_of_v<family_type, T>,
+        "A serializable type's serialization_family must be one of its base classes");
+    static serializable_base* build(const void* family_token)
+    {
+        if ( family_token != family_type::serializationFamilyToken() ) return nullptr;
+        // An inherited stub constructor may return a base of T.
+        family_type* object = T::construct_deserialize_stub();
+        return object;
+    }
+};
+
+} // namespace pvt
 
 template <class T>
 class serializable_builder_impl : public serializable_builder
@@ -255,6 +289,11 @@ protected:
 
 public:
     serializable_base* build() const override { return T::construct_deserialize_stub(); }
+
+    serializable_base* build_as(const void* family_token) const override
+    {
+        return pvt::serializable_family_builder<T>::build(family_token);
+    }
 
     const char* name() const override { return name_; }
 
@@ -277,6 +316,20 @@ public:
     static serializable_base* get_serializable(uint32_t cls_id);
 
     /**
+       Construct a registered concrete type only when it belongs to Family.
+       Ownership of the returned object transfers to the caller. As with
+       SST_SER pointer decoding, Family must have an unambiguous, non-virtual
+       serializable_base so the checked downcast is well-formed.
+     */
+    template <class Family>
+    static Family* get_serializable_as(uint32_t cls_id)
+    {
+        static_assert(std::is_same_v<typename Family::serialization_family, Family>,
+            "Family must declare itself as its serialization_family");
+        return static_cast<Family*>(get_serializable_as(cls_id, Family::serializationFamilyToken()));
+    }
+
+    /**
        @return The cls id for the given builder
     */
     static uint32_t
@@ -286,6 +339,10 @@ public:
     static bool sanity(serializable_base* ser, uint32_t cls_id) { return (*builders_)[cls_id]->sanity(ser); }
 
     static void delete_statics();
+
+private:
+    static serializable_builder* get_builder(uint32_t cls_id);
+    static serializable_base*    get_serializable_as(uint32_t cls_id, const void* family_token);
 };
 
 template <class T>
